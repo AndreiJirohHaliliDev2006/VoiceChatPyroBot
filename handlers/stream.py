@@ -1,52 +1,40 @@
-
 from pyrogram import Client, filters
-from pyrogram.handlers import MessageHandler
-import player
-from helpers import State
-from config import SUDO_FILTER, LOG_GROUP
-from strings import get_string as _
+from pyrogram.types import Message
+
+from vcpb import ytdl, player
+
+from helpers.filters import sudo_only
+from helpers.decorators import errors
 
 
-@Client.on_message(
-    filters.command("stream", "/") & SUDO_FILTER
-)
-def stream(client, message):
-    None
+@Client.on_message(filters.command("stream") & sudo_only)
+@errors
+def stream(_, message: Message):
+    if len(message.command) != 2:
+        message.reply_text("<b>❌ 1 argument is required</b>", quote=False)
+        return
+    elif player.is_streaming():
+        message.reply_text("<b>❌ Already streaming</b>", quote=False)
+        return
 
-    if player.STATE in (State.Playing, State.Paused):
-        message.reply_text(
-            _("stream_3")
-        )
-    else:
-        args = message.text.split()
+    if not player.queue.empty():
+        with player.queue.mutex:
+            player.queue.queue.clear()
 
-        if len(args) == 1:
-            message.reply_text(
-                _("stream_1")
-            )
-        elif len(args) != 2:
-            message.reply_text(
-                _("stream_2")
-            )
-        else:
-            player.stream(
-                args[1],
-                [
-                    client.send_message,
-                    [
-                        LOG_GROUP,
-                        _("group_2").format(
-                            args[1]
-                        )
-                    ]
-                ] if LOG_GROUP else None
-            )
+    if not ytdl.queue.empty():
+        with ytdl.queue.mutex:
+            ytdl.queue.queue.clear()
 
-            message.reply_text(
-                _("stream_4")
-            )
+    player.stream(message.command[1])
+    message.reply_text("<b>📻 Streaming...</b>", quote=False)
 
 
-__help__ = {
-    "stream": [_("help_stream"), True]
-}
+@Client.on_message(filters.command("stop") & sudo_only)
+@errors
+def stop(_, message: Message):
+    if not player.is_streaming():
+        message.reply_text("<b>❌ Not streaming</b>", quote=False)
+        return
+
+    player.stop_streaming()
+    message.reply_text("<b>✅ Stopped streaming</b>", quote=False)

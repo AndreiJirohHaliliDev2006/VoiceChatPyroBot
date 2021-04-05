@@ -1,184 +1,50 @@
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.handlers import MessageHandler
-from helpers import is_youtube
-from ytdl import download
-import requests
-import player
-import db
-from helpers import wrap
-from config import SUDO_FILTER, LOG_GROUP, LOG_GROUP_FILTER
-from strings import get_string as _
+from pyrogram.types import Message
+
+from vcpb import ytdl, player
+
+from helpers.regex import is_youtube
+from helpers.queues import func
+from helpers.decorators import errors
+
+from config import CHAT_ID
 
 
-@Client.on_message(filters.text & filters.private & ~filters.regex(r"^x .+"), group=2)
-@wrap
-def message(client, message):
-    if message.text.startswith("/"):
-        return
-
+@Client.on_message(filters.text & filters.private)
+@errors
+def play(client: Client, message: Message):
     if not is_youtube(message.text):
-        message.reply_text(_("play_1"))
+        return
+    elif "list=" in message.text:
+        message.reply_text("<b>❌ Can’t play playlists</b>", quote=True)
+        return
+    elif player.is_streaming():
+        message.reply_text("<b>❌ Can’t play while streaming</b>", quote=True)
         return
 
-    if "list=" in message.text:
-        message.reply_text(_("play_2"))
-        return
+    m = message.reply_text("<b>✅ Download scheduled</b>", quote=True)
 
-    m = message.reply_text(_("play_3"), quote=True)
-
-    download(
-        (m.edit, (_("ytdl_1"),)),
-        (m.edit, (_("ytdl_2").format(player.q.qsize() + 1),)),
-        [
+    ytdl.download(
+        video=message.text,
+        sender_id=message.from_user.id,
+        sender_name=message.from_user.first_name,
+        play_function=func(
             player.play,
-            [
-                None,
-                (message.reply_text, (_("player_1"),)),
-                (message.reply_text, (_("player_2"),)),
-                None,
-                None,
-                message.from_user.id,
-                message.from_user.first_name,
-                [
-                    client.send_photo,
-                    [
-                        LOG_GROUP,
-                        None,
-                        _("group_1").format(
-                            '<a href="{}">{}</a>',
-                            "{}",
-                            '<a href="tg://user?id={}">{}</a>',
-                        ),
-                        "HTML",
-                        None,
-                        None,
-                        True,
-                        None,
-                        None,
-                        InlineKeyboardMarkup(
-                            [
-                                [
-                                    InlineKeyboardButton(
-                                        _("playlist_3"), "add_to_playlist"
-                                    ),
-                                ],
-                            ]
-                        ),
-                    ],
-                ]
-                if LOG_GROUP
-                else None,
-                None,
-                (message.reply_text, (_("skip_3"),)),
-            ],
-        ],
-        (m.edit, (_("ytdl_3"),)),
-        message.text,
-        (m.edit, (_("error"),)),
-        [
-            m.edit,
-            [
-                _("ytdl_4"),
-            ],
-        ],
+            log=func(
+                client.send_message,
+                CHAT_ID,
+                "<b>▶️ Playing</b> {}\n<b>🕔 Duration:</b> {}\n<b>👤 Requester:</b> {}".format(
+                    '<a href="{}">{}</a>',
+                    "{}",
+                    message.from_user.mention(),
+                ),
+                disable_web_page_preview=True
+            ),
+            on_start=func(message.reply_text, "<b>▶️ Playing...</b>", ),
+            on_end=func(message.reply_text, "<b>✅ Finished playing</b>", ),
+        ),
+        on_start=func(m.edit, "<b>🔄 Downloading...</b>"),
+        on_end=func(m.edit, "<b>#️⃣ Scheduled to play at position {}</b>".format(player.queue.qsize() + 1)),
+        on_is_live_error=func(m.edit, "<b>❌ Can’t download live video</b>"),
+        on_error=func(m.edit, "{}: {}"),
     )
-
-
-@Client.on_message(filters.command("play_playlist", "/") & SUDO_FILTER & LOG_GROUP_FILTER)
-@wrap
-def play_playlist(client, message):
-    playlist = db.get_playlist()
-
-    if not playlist:
-        message.reply_text(_("playlist_1"))
-    elif player.is_currently_playing():
-        message.reply_text(_("playlist_9"))
-    else:
-        message.reply_text(_("playlist_2"))
-
-        for item in playlist:
-
-            download(
-                None,
-                None,
-                [
-                    player.play,
-                    [
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        message.from_user.id,
-                        message.from_user.first_name,
-                        [
-                            client.send_photo,
-                            [
-                                LOG_GROUP,
-                                None,
-                                _("group_1").format(
-                                    '<a href="{}">{}</a>',
-                                    "{}",
-                                    '<a href="tg://user?id={}">{}</a>',
-                                ),
-                                "HTML",
-                                None,
-                                None,
-                                True,
-                                None,
-                                None,
-                                InlineKeyboardMarkup(
-                                    [
-                                        [
-                                            InlineKeyboardButton(
-                                                _("playlist_6"), "rm_from_playlist"
-                                            ),
-                                        ],
-                                    ]
-                                ),
-                            ],
-                        ]
-                        if LOG_GROUP
-                        else None,
-                        None,
-                        None,
-                    ],
-                ],
-                None,
-                item["url"],
-                None,
-                None,
-            )
-
-
-@Client.on_message(filters.command("clear_playlist", "/") & SUDO_FILTER & LOG_GROUP_FILTER)
-def clear_playlist(client, message):
-    if db.remove_all():
-        message.reply_text(_("playlist_10"))
-    else:
-        message.reply_text(_("playlist_1"))
-
-
-@Client.on_message(filters.command("playlist", "/") & SUDO_FILTER & LOG_GROUP_FILTER)
-def playlist(client, message):
-    all_ = db.get_playlist()
-
-    if not all_:
-        message.reply_text(_("playlist_1"))
-        return
-
-    _all = ""
-
-    for i in range(len(all_)):
-        _all += str(i + 1) + ". " + all_[i]["title"] + ": " + all_[i]["url"] + "\n"
-
-    if len(_all) < 4096:
-        message.reply_text(_all, parse_mode=None, disable_web_page_preview=True)
-    else:
-        message.reply_text(
-            "https://nekobin.com/"
-            + requests.post(
-                "https://nekobin.com/api/documents", data={"content": _all}
-            ).json()["result"]["key"]
-        )

@@ -1,59 +1,56 @@
-
 from pyrogram import Client, filters
-from pyrogram.handlers import MessageHandler
-import player
-from helpers import wrap, State
-from config import SUDO_FILTER
-from strings import get_string as _
+from pyrogram.types import Message
+
+from vcpb import player
+from helpers.filters import sudo_only
+from helpers.decorators import errors
 
 
-@Client.on_message(
-    filters.command("pause", "/") & SUDO_FILTER
-)
-@wrap
-def pause(client, message):
-    if player.STATE in State.Playing:
-        player.STATE = State.Paused
-        player.pause_resume()
-        message.reply_text(_("pause_1"))
-    elif player.STATE == State.Paused:
-        message.reply_text(_("pause_2"))
+@Client.on_message(filters.command("pause") & sudo_only)
+@errors
+def pause(_, message: Message):
+    if player.mpv.pause:
+        message.reply_text("<b>❌ Nothing is playing</b>", quote=False)
     else:
-        message.reply_text(_("pause_3"))
+        player.mpv.pause = True
+        message.reply_text("<b>⏸ Paused</b>", quote=False)
 
 
-@Client.on_message(
-    (
-        filters.command("resume", "/")
-        | filters.command("play", "/")
-    ) & SUDO_FILTER
-)
-@wrap
-def resume(client, message):
-    if player.STATE == State.Paused:
-        player.STATE = State.Playing
-        player.pause_resume()
-        message.reply_text(_("pause_4"))
+@Client.on_message((filters.command("resume") | filters.command("play")) & sudo_only)
+@errors
+def resume(_, message: Message):
+    if player.mpv.pause:
+        player.mpv.pause = False
+        message.reply_text("<b>▶️Resumed</b>", quote=False)
     else:
-        message.reply_text(_("pause_5"))
+        message.reply_text("<b>❌ Nothing is paused</b>", quote=False)
 
 
-@Client.on_message(
-    filters.command("skip", "/") & SUDO_FILTER
-)
-@wrap
-def skip(client, message):
-    if player.STATE in (State.Playing, State.Streaming, State.Paused):
-        player.STATE = State.Skipped
-        player.abort()
-        message.reply_text(_("skip_1"))
+@Client.on_message(filters.command("skip") & sudo_only)
+@errors
+def skip(_, message: Message):
+    if player.mpv.filename:
+        player.mpv.stop()
+        message.reply_text("<b>⏩ Skipped the current song</b>", quote=False)
     else:
-        message.reply_text(_("skip_2"))
+        message.reply_text("<b>❌ Nothing is playing</b>", quote=False)
 
 
-__help__ = {
-    "pause": [_("help_pause"), True],
-    "resume": [_("help_resume"), True],
-    "play": [_("help_play"), True],
-    "skip": [_("help_skip"), True]
-}
+@Client.on_message(filters.command("seekf") & sudo_only)
+@errors
+def seekf(_, message: Message):
+    if player.mpv.filename:
+        player.mpv.seek(int(message.command[1]))
+        message.reply_text(f"<b>⏩ Skipped {message.command[1]} seconds</b>")
+    else:
+        message.reply_text("<b>❌ Nothing is playing</b>")
+
+
+@Client.on_message(filters.command("seekb") & sudo_only)
+@errors
+def seekb(_, message: Message):
+    if player.mpv.filename or player.mpv.pause:
+        player.mpv.seek(-int(message.command[1]))
+        message.reply_text(f"<b>⏪ Reversed {message.command[1]} seconds</b>")
+    else:
+        message.reply_text("<b>❌ Nothing is playing</b>")
